@@ -118,8 +118,13 @@ A v2 of the file transfer protocol got invented to add the following features:
 
 - Resumable transfers after a connection interruption
 - No need to build a temporary zip file; for both speed and space efficiency reasons. Also zip has a lot of other subtle limitations.
+- Allow for multiple transfer from both sides using a single connection
 
-The feature of sending text messages (without a transit connection), on the other hand, got removed.
+The feature of sending text messages (without a transit connection), on the other hand, got removed. The only distinction between a file
+and a folder transfer is an optional directory/transfer name:
+
+- On transfers with multiple files, the presence of a name filed distinguishes between "transfer a folder" and "transfer multiple files".
+- On transfers with a single file, omitting that name TODO
 
 ### Basic protocol
 
