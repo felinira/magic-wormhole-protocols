@@ -172,7 +172,9 @@ As the first message, it is the distinguisher for version 2 file transfer. As th
 
 ### Send offer
 
-File paths must be normalized and relative to the root of the folder to send. If the sender's file system does not support modification times, `mtime` must be constant (preferably `0`).
+File paths must be normalized and relative to the root of the folder to send.
+File paths must use `/` as separator regardless of the operating system.
+If the sender's file system does not support modification times, `mtime` must be constant (preferably `0`).
 `files` must not be empty. If there are multiple files, `directory-name` may be set to mark
 this transfer as directory instead of a loose collection of files. If it is not present, `path`
 must have a depth of one, i.e. only contain the file name.
@@ -222,7 +224,7 @@ As before, an offer may be rejected using an `error` message.
 ### Payload transfer
 
 After receiving the ack, the sender transfers the payload according to the `format`. For each file, the data stream
-must start with the offset requested by the receiver. A `payload-v2` message contains only the bytes as value.
+must start at the offset requested by the receiver. A `payload-v2` message contains only the bytes as value.
 
 ```json
 {
@@ -268,7 +270,7 @@ systems, applications should pay attention to the following details:
   in the send offer. Clients should not deal with this more than strictly
   necessary, and delegate the actual logic to the tar implementation.
 - Symlinks are preserved by default when sending directories
-- Hardlinks may be resolved/duplicated at any point
+- Hardlinks and reflinks may be resolved/duplicated at any point
 - Permissions are not preserved by default (use rsync for that instead), it
   is up to the receiver whether they want to honor the execute flag.
 - The sender's mtime should be preserved, unless it is zero
@@ -289,6 +291,8 @@ when a transfer should be resumed instead of being started anew. However, not ev
 may be recovered from, forcing a full retransfer:
 
 - 
+
+### Random notes
 
 ## Future Extensions
 
