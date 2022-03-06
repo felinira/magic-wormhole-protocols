@@ -113,7 +113,7 @@ the Transit connection. The final ack of the received data is sent through
 the Transit object, as a UTF-8-encoded JSON-encoded dictionary with `ack: ok`
 and `sha256: HEXHEX` containing the hash of the received data.
 
-## Transfer v2 (proposal)
+## Transfer v2
 
 Version 2 of the file transfer protocol got invented to add the following features:
 
@@ -128,7 +128,7 @@ and a folder transfer is an optional directory/transfer name: If there are multi
 
 Both sides immediately negotiate a transit connection. Once established, they start communicating over it and close
 the rendezvous connection. All messages over the relay connection are encoded using [msgpack](https://msgpack.org/) instead of JSON
-to allow binary payloads. For the same reason, all protocol examples in this document will use JSON regardless.
+to allow binary payloads. (All protocol examples in this document will use JSON regardless.)
 
 The sender then sends an offer, which contains a list of all the files, their size, modification time <!-- , and a transfer identifier that can be used to resume connections -->.
 
@@ -139,7 +139,9 @@ The sender then sends the requested bytes over the relay using one of the suppor
 ### Application version
 
 Setting the `transfer-v2` ability also requires providing a `transfer-v2` dictionary with the following values:
-`supported-formats` (see below) and `transit-abilities`, which is the same as `abilities-v1` in the version 1 specification. We send the transit abilities in a separate message so that the `transit` message may only contain
+`supported-formats` (see below) and `transit-abilities`, which is the same as `abilities-v1` in the version 1 specification. Within the `transit-abilities`, the minimum supported version for `relay` hints is 2. `relay-v1`
+should not be supported.
+We send the transit abilities in a separate message so that the `transit` message may only contain
 the hints for abilities both sides support.
 
 #### Supported formats
@@ -147,6 +149,8 @@ the hints for abilities both sides support.
 At the moment, the only supported format is `tar.zst`. The files are sent bundled as a tar ball, compressed with zstd. The details are up to the sender; a low compression level is recommended. Only the files requested by the sender must be sent, and only the bytes starting from the requested offset must be contained.
 
 ### Transit hints
+
+TODO rewrite this section
 
 The discriminant of the array values is `type`.
 TODO wtf Note that the hints for abilities added in the future might follow a slightly different schema than in version 1: `relay-v1` hints are encoded as list of URIs. The schema for TCP relays is `tcp://hostname:port`.
@@ -180,12 +184,17 @@ this transfer as directory instead of a loose collection of files. If it is not 
 must have a depth of one, i.e. only contain the file name.
 The `format` must be one that both sides support.
 
+`type` must be one of `"regular-file"`, `"empty-directory"` and `"symlink"`. Only empty directories should be
+announced all others are implicit. This has the advantage the set of provided paths is prefix free. This can
+be enforced early on the client side to reduce the attack surface for file system traversal. TODO do we really want this?
+
 ```json
 {
     "offer-v2": {
         "transfer-name": "<string, optional>",
         "files": [
             {
+                "type": "<string>",
                 "path": "<string>",
                 "size": "<integer>",
                 "mtime": "<integer>"
