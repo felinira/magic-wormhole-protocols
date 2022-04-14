@@ -10,7 +10,7 @@ them before sending through the rendezvous server to the peer).
 
 ## Application version
 
-The main key in the `app_version` object is called `abilities`, which is an array of strings. The known values are: `["transfer-v1", "transfer-v2"]`. Unknown values and keys have to be accepted by every client. An ability may specify additional hints to store in the object as well. If the value is empty (`{}`), `{abilities = ["transfer-v1"];}` must be assumed for backwards compatibility. `transfer-v1` SHOULD always be supported.
+The main key in the `app_version` object is called `abilities`, which is an array of strings. The known values are: `["transfer-v1", "transfer-v2"]`. Unknown values and keys have to be accepted by every client. An ability may specify additional hints to store in the object as well. If the value is empty (`{}`), `{abilities = ["transfer-v1"];}` must be assumed for backwards compatibility. `transfer-v1` should always be supported.
 
 The sender gets to pick a protocol version and capabilities based on the version information of the peer. The receiver distinguishes which protocol is used on the first incoming message. (Therefore, different protocol versions must be distinguishable on the first message.)
 
@@ -18,11 +18,11 @@ The sender gets to pick a protocol version and capabilities based on the version
 
 ```json
 {
-    "abilities": ["transfer-v1", "transfer-v2"],
-    "transfer-v2": {
-        "supported-formats": ["tar.zst"],
-        "transit-abilities": ["direct-tcp-v1", "relay-v1"]
-    }
+  "abilities": ["transfer-v1", "transfer-v2"],
+  "transfer-v2": {
+    "supported-formats": ["plain", "zst"],
+    "transit-abilities": ["direct-tcp-v1", "relay-v1"],
+  }
 }
 ```
 
@@ -119,89 +119,103 @@ Version 2 of the file transfer protocol got invented to add the following featur
 
 - Resumable transfers after a connection interruption
 - No need to build a temporary zip file; for both speed and space efficiency reasons. Also zip has a lot of other subtle limitations.
-- Allow for multiple transfer from both sides using a single connection
+<!-- - Allow for multiple transfer from both sides using a single connection -->
 
-The feature of sending text messages (without a transit connection), on the other hand, got removed (version 1 serves us well for that purpose). The only distinction between a file
-and a folder transfer is an optional directory/transfer name: If there are multiple files, the presence of a name field distinguishes between "transfer a folder" and "transfer multiple files".
+The feature of sending text messages (without a transit connection), on the other hand, got removed (version 1 serves us well for that purpose).
+All transfers may contain multiple files: This covers both the "single file" use
+case as well as the "folder" use case.
+
+### Application version
+
+Setting the `transfer-v2` ability also requires providing a `transfer-v2` dictionary with the following values:
+`supported-formats` (see below) and `transit-abilities`, which is the same as `abilities-v1` in the version 1 specification. The transit abilities are exchanged earlier than in version 1 so that the `transit` message may
+only contain the hints for abilities both sides support, which avoids wasting effort.
+
+<!-- The `multi-transfers` feature allows both sides to make multiple transfer offers
+instead of the fixed "offer/accept" schema from version 1. Since that feature
+imburs a bit of additional complexity and is of little use for some clients (e.g.
+CLI applications), it was made optional. -->
+
+#### Supported formats
+
+Known formats are `plain` and `zst`. The former indicates uncompressed data and
+must be supported by all clients; all other formats are optional. TODO
+At the moment, the only supported format is `zst`. The details are up to the sender; a low compression level is recommended.
 
 ### Overview
 
 Both sides immediately negotiate a transit connection. Once established, they start communicating over it and close
 the rendezvous connection. All messages over the relay connection are encoded using [msgpack](https://msgpack.org/) instead of JSON
-to allow binary payloads. (All protocol examples in this document will use JSON regardless.)
+to allow binary payloads. (All protocol examples in this document will use JSON for readability.)
 
-The sender then sends an offer, which contains a list of all the files, their size, modification time <!-- , and a transfer identifier that can be used to resume connections -->.
+<!-- If `multi-transfers` is disabled: -->
 
-The receiver responds either with either a `"transfer rejected"` error or with an acknowledgement. The acknowledgement may contain a list of byte offsets, one for each file, which will tell the sender from where to resume the transfer.
+- The sender starts by sending an offer. The receiver accepts it and receives the bytes.
+- The receiver rejects the offer by closing the connection with an error.
+- The connection is closed once all accepted files have been transferred (and checked).
 
-The sender then sends the requested bytes over the relay using one of the supported formats. Afterwards, both exchange a message with checksums to notice any connection errors.
+<!-- Otherwise:
 
-### Application version
+- Any side, at any time, may offer to send files. Each file offer is associated
+  with a transfer ID.
+  - An offer is valid until accepted or the connection ends. (Accepting an offer multiple times is thus invalid.)
+- Any side, at any time, may accept to receive files, based on their IDs.
+- A transfer offer should be ignored instead of rejected.
+- Corrupt transfers don't close the connection with an error
+  - It is up to the sender to re-offer failed files for transfer
+- Any side may close the connection, immediately stopping
 
-Setting the `transfer-v2` ability also requires providing a `transfer-v2` dictionary with the following values:
-`supported-formats` (see below) and `transit-abilities`, which is the same as `abilities-v1` in the version 1 specification. Within the `transit-abilities`, the minimum supported version for `relay` hints is 2. `relay-v1`
-should not be supported.
-We send the transit abilities in a separate message so that the `transit` message may only contain
-the hints for abilities both sides support.
-
-#### Supported formats
-
-At the moment, the only supported format is `tar.zst`. The files are sent bundled as a tar ball, compressed with zstd. The details are up to the sender; a low compression level is recommended. Only the files requested by the sender must be sent, and only the bytes starting from the requested offset must be contained.
+`multi-transfers` is enabled if and only if both sides support it. -->
 
 ### Transit hints
 
-TODO rewrite this section
-
-The discriminant of the array values is `type`.
-TODO wtf Note that the hints for abilities added in the future might follow a slightly different schema than in version 1: `relay-v1` hints are encoded as list of URIs. The schema for TCP relays is `tcp://hostname:port`.
+This is the first and (usually) also last message sent over the Wormhole connection.
+As the first message, it is the distinguisher for version 2 file transfer. As the last message, all following communication uses the transit connection, encoded using `msgpack`.
+Both sides then close their Wormhole connection as soon as transit is established.
+The message type is `transit-v2` and it is equivalent to the v1 `transit` message,
+except that it only contains the hints (the abilities have already been sent earlier).
 
 ```json
 {
-    "transit-v2": [
-        {
-            "type": "<'direct-tcp-v1' or 'tor-tcp-v1'>",
-            "hostname": "<string>",
-            "port": "<TCP port>",
-        },
-        {
-            "type": "relay-v1",
-            "urls": [ "<URI>" ]
-        }
-    ]
+  "transit-v2": {
+    "hints-v1": [ … ]
+  }
 }
 ```
 
-This is the first and (usually) also last message sent over the Wormhole connection (except for `error` messages).
-As the first message, it is the distinguisher for version 2 file transfer. As the last message, all following communication uses the transit connection, encoded using `msgpack`. Both sides then close their Wormhole connection.
-
 ### Send offer
 
-File paths must be normalized and relative to the root of the folder to send.
-File paths must use `/` as separator regardless of the operating system.
+A send offer has only one entry, but which may contain a recursive directory
+structure. If the top level entry is not a file, receiving clients may display
+the offer either as single folder or as a list of files.
+
+File names may be *arbitrary* (but UTF-8 encoded), it is up to the receiver to
+sanitize them. Handling of unsupported file names is implementation speficit,
+but could for example be realized through escaping or rejection of the offer.
+
 If the sender's file system does not support modification times, `mtime` must be constant (preferably `0`).
 `files` must not be empty. If there are multiple files, `directory-name` may be set to mark
 this transfer as directory instead of a loose collection of files. If it is not present, `path`
 must have a depth of one, i.e. only contain the file name.
 The `format` must be one that both sides support.
 
-`type` must be one of `"regular-file"`, `"empty-directory"` and `"symlink"`. Only empty directories should be
-announced all others are implicit. This has the advantage the set of provided paths is prefix free. This can
-be enforced early on the client side to reduce the attack surface for file system traversal. TODO do we really want this?
+`type` must be one of `"regular-file"`, `"directory"` and `"symlink"`. Regular
+files have an additional `size` field (in bytes) and an `id`. Directories have a
+`content` field, which contains a list of direct children. Symlinks have a
+`target` path.
 
 ```json
 {
-    "offer-v2": {
-        "transfer-name": "<string, optional>",
-        "files": [
-            {
-                "type": "<string>",
-                "path": "<string>",
-                "size": "<integer>",
-                "mtime": "<integer>"
-            }
-        ],
-        "format": "tar.zst",
-    }
+  "offer-v2": {
+    "transfer-name": "<string, optional>",
+    "content": {
+      "type": "<string>",
+      "name": "<string>",
+      "mtime": "<integer>",
+      "format": "<string>",
+      …
+    },
+  }
 }
 ```
 
@@ -217,27 +231,31 @@ The attempt to send the same files twice should use the same `transfer-id`. How 
 
 ### Receive ack
 
-`files` contains a mapping from file (index) to offset (bytes). If omitted, all files must be sent.
-As before, an offer may be rejected using an `error` message.
+`files` contains a mapping from transfer ID to offset (bytes).
+<!-- Unless both sides set `multi-transfers`, --> an offer may be rejected using an
+`error` message.
 
 ```json
 {
-    "answer-v2": {
-        "files": {
-            "<integer>": "<integer>"
-        },
-    }
+  "answer-v2": {
+    "files": {
+      "<string>": "<integer>"
+    },
+  }
 }
 ```
 
 ### Payload transfer
 
 After receiving the ack, the sender transfers the payload according to the `format`. For each file, the data stream
-must start at the offset requested by the receiver. A `payload-v2` message contains only the bytes as value.
+must start at the offset requested by the receiver. A `payload-v2` message contains only the (compressed) bytes as value.
 
 ```json
 {
-    "payload-v2": "<bytes>"
+  "payload-v2": {
+    "id": "<string>",
+    "payload": "<bytes>",
+  }
 }
 ```
 
@@ -252,21 +270,20 @@ At the end of the transfer, *both* sides send their checksums. That way, they do
 to exchange their opinion: they can both calculate themselves whether things went wrong or not and only need to notify
 the user. Once the checksums are exchanged, the transfer is complete and the connection may be closed.
 
-`wire-sha256` is the (binary) sha256sum of all transferred payload bytes (i.e. before decompression).
-Furthermore, there is a per file integrity check — it is skipped if and only if all transfer offsets were zero.
+There is a per file integrity check. `wire-sha256` is the (binary) sha256sum of all transferred payload bytes (i.e. before decompression). `sha256` is the sha256sum of the *entire* file, including bytes before the resumption offset.
 
 ```json
 {
-    "transfer-ack-v2": {
+  "transfer-ack-v2": {
+    "files": [
+      {
+        "id": "<string>",
+        "size": "<integer>",
         "wire-sha256": "<bytes>",
-        "files": [
-            {
-                "path": "<string>",
-                "size": "<integer>",
-                "sha256": "<bytes>"
-            }
-        ],
-    }
+        "sha256": "<bytes>",
+      }
+    ],
+  }
 }
 ```
 
@@ -276,20 +293,16 @@ File systems are hard. To achieve consistent and sane behavior across implementa
 systems, applications should pay attention to the following details:
 
 - The `size` field of folders, symlinks and other non-regular files must be 0
-  in the send offer. Clients should not deal with this more than strictly
-  necessary, and delegate the actual logic to the tar implementation.
+  in the send offer.
 - Symlinks are preserved by default when sending directories
 - Hardlinks and reflinks may be resolved/duplicated at any point
-- Permissions are not preserved by default (use rsync for that instead), it
-  is up to the receiver whether they want to honor the execute flag.
+- Permissions are not preserved by default (use rsync for that instead).
 - The sender's mtime should be preserved, unless it is zero
 - Extended file attributes (xattrs) are not preserved
-- A second transfer with the same ID may contain more files than before, but also less.
 - Files may have been modified between transfers. Checking the modification time
   is necessary, but not sufficient.
-- To avoid file system hacking: file paths – both in the send offer as well as in the
-  actual tar file – must be relative (i.e. don't start with `/`) and normalized (i.e. not
-  contain `..` elements). The receiver must always check this. Symlinks *must not* be followed.
+- To avoid file system hacking: The receiver must check for malicious file paths
+  and invalid/unsupported character sequences. Symlinks *must not* be followed.
 
 ### When to resume
 
@@ -305,10 +318,6 @@ may be recovered from, forcing a full retransfer:
 
 ## Future Extensions
 
-* "command mode": establish the connection, *then* figure out what we want to
-  use it for, allowing multiple files to be exchanged, in either direction.
-  This is to support a GUI that lets you open the wormhole, then drop files
-  into it on either end.
 * some Transit messages being sent early, so ports and Onion services can be
   spun up earlier, to reduce overall waiting time
 * transit messages being sent in multiple phases: maybe the transit
