@@ -131,11 +131,6 @@ Setting the `transfer-v2` ability also requires providing a `transfer-v2` dictio
 `supported-formats` (see below) and `transit-abilities`, which is the same as `abilities-v1` in the version 1 specification. The transit abilities are exchanged earlier than in version 1 so that the `transit` message may
 only contain the hints for abilities both sides support, which avoids wasting effort.
 
-<!-- The `multi-transfers` feature allows both sides to make multiple transfer offers
-instead of the fixed "offer/accept" schema from version 1. Since that feature
-imburs a bit of additional complexity and is of little use for some clients (e.g.
-CLI applications), it was made optional. -->
-
 #### Supported formats
 
 Known formats are `plain` and `zst`. The former indicates uncompressed data and
@@ -148,24 +143,9 @@ Both sides immediately negotiate a transit connection. Once established, they st
 the rendezvous connection. All messages over the relay connection are encoded using [msgpack](https://msgpack.org/) instead of JSON
 to allow binary payloads. (All protocol examples in this document will use JSON for readability.)
 
-<!-- If `multi-transfers` is disabled: -->
-
 - The sender starts by sending an offer. The receiver accepts it and receives the bytes.
 - The receiver rejects the offer by closing the connection with an error.
 - The connection is closed once all accepted files have been transferred (and checked).
-
-<!-- Otherwise:
-
-- Any side, at any time, may offer to send files. Each file offer is associated
-  with a transfer ID.
-  - An offer is valid until accepted or the connection ends. (Accepting an offer multiple times is thus invalid.)
-- Any side, at any time, may accept to receive files, based on their IDs.
-- A transfer offer should be ignored instead of rejected.
-- Corrupt transfers don't close the connection with an error
-  - It is up to the sender to re-offer failed files for transfer
-- Any side may close the connection, immediately stopping
-
-`multi-transfers` is enabled if and only if both sides support it. -->
 
 ### Transit hints
 
@@ -200,14 +180,14 @@ must have a depth of one, i.e. only contain the file name.
 The `format` must be one that both sides support.
 
 `type` must be one of `"regular-file"`, `"directory"` and `"symlink"`. Regular
-files have an additional `size` field (in bytes) and an `id`. Directories have a
+files have an additional `size` field (in bytes) and a transfer `id`. Directories have a
 `content` field, which contains a list of direct children. Symlinks have a
 `target` path.
 
 ```json
 {
   "offer-v2": {
-    "transfer-name": "<string, optional>",
+    //"transfer-name": "<string, optional>",
     "content": {
       "type": "<string>",
       "name": "<string>",
@@ -219,21 +199,37 @@ files have an additional `size` field (in bytes) and an `id`. Directories have a
 }
 ```
 
-<!--
-The attempt to send the same files twice should use the same `transfer-id`. How it is generated is an implementation detail, however the following points should be taken into consideration:
+If a transfer fails mid way, we don't want to re-transmit unnecessary data when
+a second attempt is made. The idea is that when a transfer fails, the sender
+stores the IDs along with the partially transferred data. On the second attempt,
+the sender should reuse the trnasfer IDs so that the sender can tell it already
+has part of the data, therefore only requesting what it does not yet have.
 
-- Sending the same files or folder twice results in the same identifier
-  - Unless some significant amount of time passed.
-  - After a transfer succeeded, sending that content again will use a new transfer id.
-- The transfer id should not leak private information of the sender (i.e. abolute file paths)
-- The transfer id should have sufficiently high entropy to avoid collisions
--->
+Transfer IDs are opaque strings to the receiver, how they are generated is an
+implementation detail of the sender. However the following points should be taken
+into consideration:
+
+- Sending the same files or folder twice results in the same identifiers
+- When making transfer IDs content adressed, they should not leak any information
+  about the data to anybody except the receiver.
+  - All hashes in use should be salted, the salt should be kept private by the
+    sender and rotate regularly.
+- The transfer ID should have sufficiently high entropy to avoid collisions.
+  - At least 256 bits are recommended
+- Due to the purpose of allowing retransfers, no data
+- Since the goal is to facilitate retransfers after a failure, no further
+  information needs to be stored on success.
+- Retransfers after failure are expected to happen more or less immediately. The
+  data needs not be kept around longer than a few hours, at most days.
+- False negatives lead to additional retransfer of data, while false positives
+  result in a transfer failure due to hash mismatch. Therefore, try to keep the
+  ID generation as conservative as possible.
+  - Simply using fresh random IDs for everything is an acceptable strategy.
 
 ### Receive ack
 
 `files` contains a mapping from transfer ID to offset (bytes).
-<!-- Unless both sides set `multi-transfers`, --> an offer may be rejected using an
-`error` message.
+An offer may be rejected using an `error` message.
 
 ```json
 {
@@ -268,18 +264,18 @@ the 5%). Errors will be caught using checksums later on.
 
 At the end of the transfer, *both* sides send their checksums. That way, they do not need to communicate any further
 to exchange their opinion: they can both calculate themselves whether things went wrong or not and only need to notify
-the user. Once the checksums are exchanged, the transfer is complete and the connection may be closed.
+the user. Once the checksums are exchanged, the transfer is complete and the connection is closed.
 
 There is a per file integrity check. `wire-sha256` is the (binary) sha256sum of all transferred payload bytes (i.e. before decompression). `sha256` is the sha256sum of the *entire* file, including bytes before the resumption offset.
 
 ```json
 {
   "transfer-ack-v2": {
+    "wire-sha256": "<bytes>",
     "files": [
       {
         "id": "<string>",
         "size": "<integer>",
-        "wire-sha256": "<bytes>",
         "sha256": "<bytes>",
       }
     ],
@@ -292,8 +288,6 @@ There is a per file integrity check. `wire-sha256` is the (binary) sha256sum of 
 File systems are hard. To achieve consistent and sane behavior across implementations and
 systems, applications should pay attention to the following details:
 
-- The `size` field of folders, symlinks and other non-regular files must be 0
-  in the send offer.
 - Symlinks are preserved by default when sending directories
 - Hardlinks and reflinks may be resolved/duplicated at any point
 - Permissions are not preserved by default (use rsync for that instead).
